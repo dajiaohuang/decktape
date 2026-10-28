@@ -24,7 +24,7 @@ function createFrame(videos: FakeVideo[], overrides?: Partial<Timeouts>) {
         Promise,
         WeakMap,
         window,
-        HTMLMediaElement: { HAVE_METADATA: 1 },
+        HTMLMediaElement: { HAVE_METADATA: 1, HAVE_CURRENT_DATA: 2 },
         document: {
           fonts: { ready: Promise.resolve() },
           querySelectorAll: () => videos,
@@ -61,6 +61,41 @@ test('waits for a video already seeking to zero before settling the frame', asyn
   expect(elapsed).toBeLessThan(seekTimeout);
   expect(video.paused).toBe(true);
   expect(video.seeking).toBe(false);
+});
+
+test('waits for a newly loaded video frame at time zero', async () => {
+  let readyState = 0;
+  const video = Object.assign(new EventTarget(), {
+    currentSrc: 'synthetic:local-video',
+    currentTime: 0,
+    seeking: false,
+    paused: false,
+    pause() { this.paused = true; },
+  }) as unknown as FakeVideo;
+  Object.defineProperty(video, 'readyState', { get: () => readyState });
+  const frame = createFrame([video]);
+
+  // Synthetic local media becomes metadata-ready, then supplies its first frame.
+  const metadataDelay = 80;
+  const frameDelay = 240;
+  setTimeout(() => {
+    readyState = 1;
+    video.dispatchEvent(new Event('loadedmetadata'));
+    setTimeout(() => {
+      readyState = 2;
+      video.dispatchEvent(new Event('loadeddata'));
+    }, frameDelay);
+  }, metadataDelay);
+
+  const start = Date.now();
+  await settleFrame(frame);
+  const elapsed = Date.now() - start;
+
+  expect(elapsed).toBeGreaterThanOrEqual(metadataDelay / 2);
+  expect(elapsed).toBeGreaterThanOrEqual((metadataDelay + frameDelay) / 2);
+  expect(elapsed).toBeLessThan(seekTimeout);
+  expect(video.paused).toBe(true);
+  expect(readyState).toBe(2);
 });
 
 for (const recovery of ['seek finishes', 'source changes']) {

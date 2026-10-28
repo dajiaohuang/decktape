@@ -5,7 +5,7 @@ import chalk from 'chalk';
 // Maximum duration in milliseconds to wait for the web fonts to load, before printing a slide.
 export const settleTimeout = 5000;
 
-// Maximum duration in milliseconds to wait for a video to seek back to its first frame.
+// Maximum duration in milliseconds to wait for each video data or seek event.
 export const seekTimeout = 1000;
 
 // Waits for the frame content to reach a state that renders identically across exports,
@@ -34,17 +34,35 @@ export async function settleFrame(frame) {
 
       const seekToFirstFrame = async video => {
         video.pause();
-        // The media resource, as currentSrc is empty for the streams set with srcObject.
+        // Metadata is required to seek, and current data is required to print the frame.
+        const waitForEvent = types => Promise.race([
+          eventFired(video, types),
+          delay(timeouts.seek),
+        ]);
+        if (video.readyState < HTMLMediaElement.HAVE_METADATA) {
+          const loaded = await waitForEvent(['loadedmetadata', 'loadeddata', 'abort', 'emptied', 'error']);
+          if ((loaded !== 'loadedmetadata' && loaded !== 'loadeddata')
+            || video.readyState < HTMLMediaElement.HAVE_METADATA) {
+            return;
+          }
+        }
+        // The media resource, as currentSrc is empty for streams set with srcObject.
         const source = video.currentSrc || video.srcObject;
         // A completed seek or a new source allows this video to be tried again.
         if (!video.seeking || stalled.get(video) !== source) {
           stalled.delete(video);
         }
-        // Metadata is required to seek, and currentTime reports the target
-        // even while the seek is still in progress.
-        if (video.readyState < HTMLMediaElement.HAVE_METADATA
-          || (video.currentTime === 0 && !video.seeking)
-          || stalled.has(video)) {
+        // At time zero there is no seek to await, so wait until its frame data is available.
+        if (video.currentTime === 0 && !video.seeking) {
+          if (video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+            const loaded = await waitForEvent(['loadeddata', 'abort', 'emptied', 'error']);
+            if (loaded !== 'loadeddata' || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+              return;
+            }
+          }
+          return;
+        }
+        if (stalled.has(video)) {
           return;
         }
         // Also resolving on the events that end a seek without completing it, and giving up
