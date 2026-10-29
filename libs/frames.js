@@ -33,9 +33,13 @@ export async function settleFrame(frame) {
       });
 
       const seekToFirstFrame = async video => {
-        // Hidden placeholders and preload=none media have no frame to settle until activated.
-        if (video.getClientRects().length === 0
-          || (video.preload === 'none' && video.readyState < HTMLMediaElement.HAVE_METADATA)) {
+        // Skip only media that has not started loading or playback. Loaded or active videos,
+        // including hidden sources used by a visible canvas, still need to be paused and settled.
+        const notStarted = video.readyState < HTMLMediaElement.HAVE_METADATA
+          && video.paused
+          && !video.seeking
+          && video.networkState !== HTMLMediaElement.NETWORK_LOADING;
+        if (notStarted && (video.getClientRects().length === 0 || video.preload === 'none')) {
           return;
         }
         video.pause();

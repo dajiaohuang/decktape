@@ -8,6 +8,8 @@ type Timeouts = { settle: number, seek: number };
 type FakeVideo = EventTarget & Pick<HTMLVideoElement,
   'currentSrc' | 'currentTime' | 'paused' | 'pause' | 'readyState' | 'seeking'> & {
   getClientRects?: () => ArrayLike<unknown>;
+  networkState?: number;
+  play?: () => Promise<void>;
   preload?: string;
 };
 
@@ -28,7 +30,7 @@ function createFrame(videos: FakeVideo[], overrides?: Partial<Timeouts>) {
         Promise,
         WeakMap,
         window,
-        HTMLMediaElement: { HAVE_METADATA: 1, HAVE_CURRENT_DATA: 2 },
+        HTMLMediaElement: { HAVE_METADATA: 1, HAVE_CURRENT_DATA: 2, NETWORK_LOADING: 2 },
         document: {
           fonts: { ready: Promise.resolve() },
           querySelectorAll: () => videos,
@@ -44,7 +46,8 @@ test('skips a hidden lazy video placeholder without waiting', async () => {
     currentTime: 0,
     seeking: false,
     readyState: 0,
-    paused: false,
+    networkState: 0,
+    paused: true,
     hidden: true,
     dataset: { src: 'synthetic:local-video' },
     preload: 'auto',
@@ -57,7 +60,7 @@ test('skips a hidden lazy video placeholder without waiting', async () => {
   await settleFrame(frame);
 
   expect(Date.now() - start).toBeLessThan(seekTimeout / 2);
-  expect(video.paused).toBe(false);
+  expect(video.paused).toBe(true);
 });
 
 test('skips a video with preload none until it is activated', async () => {
@@ -66,7 +69,8 @@ test('skips a video with preload none until it is activated', async () => {
     currentTime: 0,
     seeking: false,
     readyState: 0,
-    paused: false,
+    networkState: 1,
+    paused: true,
     preload: 'none',
     getClientRects: () => [{}],
     pause() { this.paused = true; },
@@ -77,7 +81,83 @@ test('skips a video with preload none until it is activated', async () => {
   await settleFrame(frame);
 
   expect(Date.now() - start).toBeLessThan(seekTimeout / 2);
-  expect(video.paused).toBe(false);
+  expect(video.paused).toBe(true);
+});
+
+test('waits for a visible preload-none video activated by play before metadata', async () => {
+  let readyState = 0;
+  let networkState = 1;
+  const video = Object.assign(new EventTarget(), {
+    currentSrc: 'synthetic:local-video',
+    currentTime: 0,
+    seeking: false,
+    paused: true,
+    preload: 'none',
+    getClientRects: () => [{}],
+    play() { this.paused = false; networkState = 2; return Promise.resolve(); },
+    pause() { this.paused = true; },
+  }) as unknown as FakeVideo;
+  await video.play?.();
+  Object.defineProperties(video, {
+    readyState: { get: () => readyState },
+    networkState: { get: () => networkState },
+  });
+  const frame = createFrame([video]);
+
+  const metadataDelay = 80;
+  const frameDelay = 120;
+  setTimeout(() => {
+    readyState = 1;
+    video.dispatchEvent(new Event('loadedmetadata'));
+    setTimeout(() => {
+      readyState = 2;
+      networkState = 1;
+      video.dispatchEvent(new Event('loadeddata'));
+    }, frameDelay);
+  }, metadataDelay);
+
+  const start = Date.now();
+  await settleFrame(frame);
+  const elapsed = Date.now() - start;
+
+  expect(elapsed).toBeGreaterThanOrEqual((metadataDelay + frameDelay) / 2);
+  expect(elapsed).toBeLessThan(seekTimeout);
+  expect(video.paused).toBe(true);
+  expect(readyState).toBe(2);
+});
+
+test('pauses and rewinds a loaded hidden video used by a visible canvas', async () => {
+  let currentTime = 3;
+  let seekCount = 0;
+  const video = Object.assign(new EventTarget(), {
+    currentSrc: 'synthetic:canvas-video',
+    seeking: false,
+    readyState: 2,
+    paused: false,
+    preload: 'auto',
+    getClientRects: () => [],
+    pause() { this.paused = true; },
+  }) as unknown as FakeVideo;
+  Object.defineProperty(video, 'currentTime', {
+    get: () => currentTime,
+    set(value: number) {
+      currentTime = value;
+      seekCount++;
+      video.seeking = true;
+      setTimeout(() => {
+        video.seeking = false;
+        video.dispatchEvent(new Event('seeked'));
+      }, 0);
+    },
+  });
+  const frame = createFrame([video]);
+
+  await settleFrame(frame);
+
+  expect(video.paused).toBe(true);
+  expect(currentTime).toBe(0);
+  expect(seekCount).toBe(1);
+  expect(video.seeking).toBe(false);
 });
 
 test('waits for a video already seeking to zero before settling the frame', async () => {
