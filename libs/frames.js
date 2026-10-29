@@ -33,6 +33,11 @@ export async function settleFrame(frame) {
       });
 
       const seekToFirstFrame = async video => {
+        // Hidden placeholders and preload=none media have no frame to settle until activated.
+        if (video.getClientRects().length === 0
+          || (video.preload === 'none' && video.readyState < HTMLMediaElement.HAVE_METADATA)) {
+          return;
+        }
         video.pause();
         // Metadata is required to seek, and current data is required to print the frame.
         const waitForEvent = types => Promise.race([

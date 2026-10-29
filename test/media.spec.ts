@@ -6,9 +6,13 @@ const font = '/input/revealjs-demo/iframe/LibreCaslonCondensed-SemiBold.woff2';
 
 type Timeouts = { settle: number, seek: number };
 type FakeVideo = EventTarget & Pick<HTMLVideoElement,
-  'currentSrc' | 'currentTime' | 'paused' | 'pause' | 'readyState' | 'seeking'>;
+  'currentSrc' | 'currentTime' | 'paused' | 'pause' | 'readyState' | 'seeking'> & {
+  getClientRects?: () => ArrayLike<unknown>;
+  preload?: string;
+};
 
 function createFrame(videos: FakeVideo[], overrides?: Partial<Timeouts>) {
+  videos.forEach(video => { video.getClientRects ??= () => [{}]; });
   const window = {};
   return {
     detached: false,
@@ -33,6 +37,48 @@ function createFrame(videos: FakeVideo[], overrides?: Partial<Timeouts>) {
     },
   };
 }
+
+test('skips a hidden lazy video placeholder without waiting', async () => {
+  const video = Object.assign(new EventTarget(), {
+    currentSrc: '',
+    currentTime: 0,
+    seeking: false,
+    readyState: 0,
+    paused: false,
+    hidden: true,
+    dataset: { src: 'synthetic:local-video' },
+    preload: 'auto',
+    getClientRects: () => [],
+    pause() { this.paused = true; },
+  }) as unknown as FakeVideo;
+  const frame = createFrame([video]);
+
+  const start = Date.now();
+  await settleFrame(frame);
+
+  expect(Date.now() - start).toBeLessThan(seekTimeout / 2);
+  expect(video.paused).toBe(false);
+});
+
+test('skips a video with preload none until it is activated', async () => {
+  const video = Object.assign(new EventTarget(), {
+    currentSrc: 'synthetic:local-video',
+    currentTime: 0,
+    seeking: false,
+    readyState: 0,
+    paused: false,
+    preload: 'none',
+    getClientRects: () => [{}],
+    pause() { this.paused = true; },
+  }) as unknown as FakeVideo;
+  const frame = createFrame([video]);
+
+  const start = Date.now();
+  await settleFrame(frame);
+
+  expect(Date.now() - start).toBeLessThan(seekTimeout / 2);
+  expect(video.paused).toBe(false);
+});
 
 test('waits for a video already seeking to zero before settling the frame', async () => {
   const video = Object.assign(new EventTarget(), {
