@@ -8,13 +8,21 @@ type Timeouts = { settle: number, seek: number };
 type FakeVideo = EventTarget & Pick<HTMLVideoElement,
   'currentSrc' | 'currentTime' | 'paused' | 'pause' | 'readyState' | 'seeking'> & {
   getClientRects?: () => ArrayLike<unknown>;
+  getAttribute?: (name: string) => string | null;
+  querySelector?: (selector: string) => { getAttribute: (name: string) => string | null } | null;
+  src?: string;
+  srcObject?: unknown;
   networkState?: number;
   play?: () => Promise<void>;
   preload?: string;
 };
 
 function createFrame(videos: FakeVideo[], overrides?: Partial<Timeouts>) {
-  videos.forEach(video => { video.getClientRects ??= () => [{}]; });
+  videos.forEach(video => {
+    video.getClientRects ??= () => [{}];
+    video.getAttribute ??= () => null;
+    video.querySelector ??= () => null;
+  });
   const window = {};
   return {
     detached: false,
@@ -61,6 +69,63 @@ test('skips a hidden lazy video placeholder without waiting', async () => {
 
   expect(Date.now() - start).toBeLessThan(seekTimeout / 2);
   expect(video.paused).toBe(true);
+});
+
+test('skips a CSS-hidden placeholder without an active source', async () => {
+  const video = Object.assign(new EventTarget(), {
+    currentSrc: '',
+    currentTime: 0,
+    seeking: false,
+    readyState: 0,
+    networkState: 0,
+    paused: true,
+    preload: 'auto',
+    getClientRects: () => [{}],
+    getAttribute: () => null,
+    querySelector: () => null,
+    pause() { this.paused = true; },
+  }) as unknown as FakeVideo;
+  const frame = createFrame([video]);
+
+  const start = Date.now();
+  await settleFrame(frame);
+
+  expect(Date.now() - start).toBeLessThan(seekTimeout / 2);
+  expect(video.paused).toBe(true);
+});
+
+test('waits for a hidden video with a child source to load', async () => {
+  let readyState = 0;
+  const video = Object.assign(new EventTarget(), {
+    currentSrc: '',
+    currentTime: 0,
+    seeking: false,
+    paused: true,
+    preload: 'auto',
+    networkState: 0,
+    getClientRects: () => [{}],
+    getAttribute: () => null,
+    querySelector: () => ({ getAttribute: () => 'synthetic:local-video' }),
+    pause() { this.paused = true; },
+  }) as unknown as FakeVideo;
+  Object.defineProperty(video, 'readyState', { get: () => readyState });
+  const frame = createFrame([video]);
+  const metadataDelay = 40;
+  const frameDelay = 40;
+  setTimeout(() => {
+    readyState = 1;
+    video.dispatchEvent(new Event('loadedmetadata'));
+    setTimeout(() => {
+      readyState = 2;
+      video.dispatchEvent(new Event('loadeddata'));
+    }, frameDelay);
+  }, metadataDelay);
+
+  const start = Date.now();
+  await settleFrame(frame);
+
+  expect(Date.now() - start).toBeGreaterThanOrEqual((metadataDelay + frameDelay) / 2);
+  expect(readyState).toBe(2);
 });
 
 test('skips a video with preload none until it is activated', async () => {

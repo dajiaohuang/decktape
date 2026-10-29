@@ -39,7 +39,9 @@ export async function settleFrame(frame) {
           && video.paused
           && !video.seeking
           && video.networkState !== HTMLMediaElement.NETWORK_LOADING;
-        if (notStarted && (video.getClientRects().length === 0 || video.preload === 'none')) {
+        const hasSource = video.currentSrc || video.srcObject || video.getAttribute('src')
+          || video.querySelector('source[src]')?.getAttribute('src');
+        if (notStarted && (video.getClientRects().length === 0 || video.preload === 'none' || !hasSource)) {
           return;
         }
         video.pause();
