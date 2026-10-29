@@ -13,6 +13,7 @@ type FakeVideo = EventTarget & Pick<HTMLVideoElement,
   src?: string;
   srcObject?: unknown;
   networkState?: number;
+  error?: { code: number } | null;
   play?: () => Promise<void>;
   preload?: string;
 };
@@ -38,7 +39,7 @@ function createFrame(videos: FakeVideo[], overrides?: Partial<Timeouts>) {
         Promise,
         WeakMap,
         window,
-        HTMLMediaElement: { HAVE_METADATA: 1, HAVE_CURRENT_DATA: 2, NETWORK_LOADING: 2 },
+        HTMLMediaElement: { HAVE_METADATA: 1, HAVE_CURRENT_DATA: 2, NETWORK_LOADING: 2, NETWORK_NO_SOURCE: 3 },
         document: {
           fonts: { ready: Promise.resolve() },
           querySelectorAll: () => videos,
@@ -83,6 +84,29 @@ test('skips a CSS-hidden placeholder without an active source', async () => {
     getClientRects: () => [{}],
     getAttribute: () => null,
     querySelector: () => null,
+    pause() { this.paused = true; },
+  }) as unknown as FakeVideo;
+  const frame = createFrame([video]);
+
+  const start = Date.now();
+  await settleFrame(frame);
+
+  expect(Date.now() - start).toBeLessThan(seekTimeout / 2);
+  expect(video.paused).toBe(true);
+});
+
+test('skips a video whose media resource has already failed', async () => {
+  const video = Object.assign(new EventTarget(), {
+    currentSrc: 'synthetic:failed-video',
+    currentTime: 0,
+    seeking: false,
+    readyState: 0,
+    networkState: 3,
+    paused: true,
+    error: { code: 4 },
+    preload: 'auto',
+    getClientRects: () => [{}],
+    getAttribute: () => 'synthetic:failed-video',
     pause() { this.paused = true; },
   }) as unknown as FakeVideo;
   const frame = createFrame([video]);

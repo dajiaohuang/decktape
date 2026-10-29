@@ -41,6 +41,9 @@ export async function settleFrame(frame) {
           && video.networkState !== HTMLMediaElement.NETWORK_LOADING;
         const hasSource = video.currentSrc || video.srcObject || video.getAttribute('src')
           || video.querySelector('source[src]')?.getAttribute('src');
+        if (notStarted && (video.error || video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE)) {
+          return;
+        }
         if (notStarted && (video.getClientRects().length === 0 || video.preload === 'none' || !hasSource)) {
           return;
         }
